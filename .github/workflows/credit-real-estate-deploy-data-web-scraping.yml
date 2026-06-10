@@ -1,4 +1,4 @@
-name: Deploy Web Scraper ECS
+name: Deploy Image Generator ECS
 
 on:
   workflow_dispatch:
@@ -16,9 +16,10 @@ jobs:
 
     env:
       AWS_REGION: "us-east-1"
-      ECR_REPOSITORY: "credit-real-estate-scraper-repo"
-      ECS_CLUSTER: "credit-real-estate-cluster"
-      ECS_TASK_DEFINITION: "credit-real-estate-task"
+      ECR_REPOSITORY: "credit-real-estate-img-repo"
+      ECS_CLUSTER: "credit-real-estate-img-cluster"
+      ECS_TASK_DEFINITION: "credit-real-estate-img-task"
+      PROJECT_NAME: "credit-real-estate-img"
 
     steps:
     - name: Checkout code
@@ -46,14 +47,33 @@ jobs:
         docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
         echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
 
+    - name: Fetch Dynamic Network Configuration
+      id: fetch-network
+      run: |
+        # Query the specific Security Group created by Terraform for this project
+        SG_ID=$(aws ec2 describe-security-groups \
+          --filters "Name=group-name,Values=${{ env.PROJECT_NAME }}-fargate-sg" \
+          --query "SecurityGroups[0].GroupId" \
+          --output text)
+        
+        # Query default public subnets (filtering the ones mapping public IPs on launch)
+        SUBNET_IDS=$(aws ec2 describe-subnets \
+          --filters "Name=map-public-ip-on-launch,Values=true" \
+          --query "Subnets[*].SubnetId" \
+          --output json | jq -c '.')
+
+        echo "sg_id=$SG_ID" >> $GITHUB_OUTPUT
+        echo "subnets=$SUBNET_IDS" >> $GITHUB_OUTPUT
+
     - name: Run ECS Task
       id: run-task
       run: |
+        # Execute the task dynamically inside the true cluster and network context
         TASK_ARN=$(aws ecs run-task \
           --cluster ${{ env.ECS_CLUSTER }} \
           --task-definition ${{ env.ECS_TASK_DEFINITION }} \
           --launch-type FARGATE \
-          --network-configuration 'awsvpcConfiguration={subnets=["subnet-0744e58ab45d5cc62","subnet-0d5b9e77f7c8a9d9b"],assignPublicIp="ENABLED",securityGroups=["sg-02149b8f28a520250"]}' \
+          --network-configuration "awsvpcConfiguration={subnets=${{ steps.fetch-network.outputs.subnets }},assignPublicIp=ENABLED,securityGroups=[\"${{ steps.fetch-network.outputs.sg_id }}\"]}" \
           --query 'tasks[0].taskArn' \
           --output text)
         echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
@@ -64,4 +84,4 @@ jobs:
         aws ecs wait tasks-stopped \
           --cluster ${{ env.ECS_CLUSTER }} \
           --tasks ${{ steps.run-task.outputs.task_arn }}
-        echo "Task completed"
+        echo "Task completed successfully"
