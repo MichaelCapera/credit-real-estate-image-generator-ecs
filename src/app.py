@@ -202,7 +202,7 @@ def _send_reports(config, images_data):
 # --- MAIN APPLICATION ENTRYPOINT ---
 
 def main():
-    """Main application orchestrator designed for ECS container tasks"""
+    """Main application orchestrator designed for ECS container tasks to generate images"""
     t_global_start = time.perf_counter()
     logger.info("Initializing ECS Task image generator engine...")
     
