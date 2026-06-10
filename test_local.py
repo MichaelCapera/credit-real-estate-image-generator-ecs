@@ -9,7 +9,7 @@ os.environ['DEBUG_MODE'] = "False"
 
 # Temporary mock credentials to pass app.py initialization validation checks locally
 os.environ['GMAIL_USER'] = "creditofincaraiz@gmail.com"
-os.environ['GMAIL_APP_PASSWORD'] = "vikj brys lqcs ezti"
+os.environ['GMAIL_APP_PASSWORD'] = "xxxxxxx"
 os.environ['RECIPIENT_EMAILS'] = "michaelcapera@gmail.com"
 
 # Force project root path mapping to prevent 'ModuleNotFoundError: No module named "src"'
