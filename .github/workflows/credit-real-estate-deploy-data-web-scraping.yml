@@ -1,0 +1,67 @@
+name: Deploy Web Scraper ECS
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - 'src/**'
+      - 'Dockerfile'
+      - 'requirements.txt'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: "us-east-1"
+      ECR_REPOSITORY: "credit-real-estate-scraper-repo"
+      ECS_CLUSTER: "credit-real-estate-cluster"
+      ECS_TASK_DEFINITION: "credit-real-estate-task"
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v2
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+
+    - name: Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v1
+
+    - name: Build, tag, and push image to Amazon ECR
+      id: build-image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.sha }}
+      run: |
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
+
+    - name: Run ECS Task
+      id: run-task
+      run: |
+        TASK_ARN=$(aws ecs run-task \
+          --cluster ${{ env.ECS_CLUSTER }} \
+          --task-definition ${{ env.ECS_TASK_DEFINITION }} \
+          --launch-type FARGATE \
+          --network-configuration 'awsvpcConfiguration={subnets=["subnet-0744e58ab45d5cc62","subnet-0d5b9e77f7c8a9d9b"],assignPublicIp="ENABLED",securityGroups=["sg-02149b8f28a520250"]}' \
+          --query 'tasks[0].taskArn' \
+          --output text)
+        echo "task_arn=$TASK_ARN" >> $GITHUB_OUTPUT
+        echo "Task ARN: $TASK_ARN"
+
+    - name: Wait for task to complete
+      run: |
+        aws ecs wait tasks-stopped \
+          --cluster ${{ env.ECS_CLUSTER }} \
+          --tasks ${{ steps.run-task.outputs.task_arn }}
+        echo "Task completed"

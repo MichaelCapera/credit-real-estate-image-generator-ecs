@@ -1,0 +1,4 @@
+ecr_repository_url = "383961856456.dkr.ecr.us-east-1.amazonaws.com/credit-real-estate-img-repo"
+ecs_cluster_name = "credit-real-estate-img-cluster"
+ecs_task_definition_arn = "arn:aws:ecs:us-east-1:383961856456:task-definition/credit-real-estate-img-task:1"
+fargate_schedule_name = "credit-real-estate-img-schedule"

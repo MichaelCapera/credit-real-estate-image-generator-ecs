@@ -1,0 +1,25 @@
+# terraform.tfvars
+aws_region       = "us-east-1"
+project_name     = "credit-real-estate-image-generator-ecs"
+
+# Database
+db_host          = "aws-0-us-west-2.pooler.supabase.com"
+db_name          = "postgres"
+db_user          = "postgres.dsyuobzdecxoutyejzhh"
+db_password      = "a1aeef17-d671-4d5d-b47b-5dc77cd0d1f2"
+db_port          = 5432
+
+# Email
+gmail_user       = "creditofincaraiz@gmail.com"
+gmail_app_password = "vikj brys lqcs ezti"
+alert_recipient  = "michaelcapera@gmail.com"
+# API Configuration (NUEVO)
+api_url          = "https://8xuawsbnzg.execute-api.us-east-1.amazonaws.com/dev/data-properties"
+images_quantity  = 5
+
+# Email recipients for images (NUEVO - CAMBIAR CORREOS)
+recipient_emails = ["michaelcapera@gmail.com", "otrocorreo@gmail.com"]
+
+# Fargat (OPCIONAL - puedes mantener los valores por defecto)
+fargate_cpu    = 1024
+fargate_memory = 2048
