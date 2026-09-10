@@ -92,3 +92,10 @@ variable "fargate_memory" {
   description = "Memory in MB for Fargate task"
   default     = 2048
 }
+
+# --- S3 Storage Configuration ---
+variable "s3_bucket_name" {
+  type        = string
+  description = "Name of the S3 bucket for storing generated property images"
+  default     = "credit-real-estate-images-bucket"
+}
