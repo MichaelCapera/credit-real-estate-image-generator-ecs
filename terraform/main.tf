@@ -135,6 +135,14 @@ resource "aws_ecs_task_definition" "image_generator_task" {
         { name = "RECIPIENT_EMAILS", value = join(",", var.recipient_emails) },
         { name = "GMAIL_USER", value = var.gmail_user },
         { name = "GMAIL_APP_PASSWORD", value = var.gmail_app_password },
+        { name = "AWS_REGION", value = var.aws_region },
+        { name = "AWS_DEFAULT_REGION", value = var.aws_region },
+        { name = "S3_BUCKET_NAME", value = var.s3_bucket_name },
+        { name = "DB_HOST", value = var.db_host },
+        { name = "DB_NAME", value = var.db_name },
+        { name = "DB_USER", value = var.db_user },
+        { name = "DB_PASSWORD", value = var.db_password },
+        { name = "DB_PORT", value = tostring(var.db_port) },
         { name = "CHROME_BINARY", value = "/usr/bin/google-chrome" },
         { name = "CHROMEDRIVER_BINARY", value = "/usr/bin/chromedriver" }
       ]
