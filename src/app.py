@@ -39,145 +39,133 @@ def select_properties(properties, quantity):
 
 
 def generate_image_in_memory(property_data, template_bytes, index, debug=False):
-    """
-    Generate a high-quality JPG image from the PDF template and property data,
-    incorporating a rotating theme offset based on the calendar day.
-    """
     t_start_render = time.perf_counter()
 
-    doc = fitz.open(stream=template_bytes, filetype="pdf")
-    page = doc[0]
+    # Create a new PDF document with the exact Instagram Stories dimensions
+    doc = fitz.open()
+    page = doc.new_page(width=1080, height=1920)
 
-    image_rect = fitz.Rect(0, 100, 810, 750)
-    title_rect = fitz.Rect(45, 738, 765, 825)
-    price_rect = fitz.Rect(0, 880, 810, 950)
+    # Insert the PNG template as the background of the page
+    page.insert_image(fitz.Rect(0, 0, 1080, 1920), stream=template_bytes)
+
+    # --- LAYOUT RECTANGLES (in 1080x1920 coordinate space) ---
+    # Property image: white block area
+    image_rect = fitz.Rect(0, 320, 1080, 850)
+
+    # Info panel (black block): holds title, area, ref, price, phone
+    info_panel_rect = fitz.Rect(0, 850, 1080, 1450)
+
+    # Title text inside the panel
+    title_rect = fitz.Rect(60, 880, 1020, 1060)
+
+    # Area + Ref text
+    area_rect = fitz.Rect(60, 1070, 1020, 1140)
+
+    # Price text (gold, big)
+    price_rect = fitz.Rect(60, 1170, 1020, 1300)
+
+    # Phone text (gold)
+    phone_rect = fitz.Rect(60, 1320, 1020, 1420)
+
+    # Colors
+    GOLD_COLOR = (0.788, 0.663, 0.380)   # #C9A961
+    WHITE_COLOR = (1, 1, 1)
+    GRAY_COLOR = (0.65, 0.65, 0.65)
 
     if debug:
         shape = page.new_shape()
-        shape.draw_rect(image_rect)
-        shape.finish(color=(1, 0, 0), width=1)
-        shape.draw_rect(title_rect)
-        shape.finish(color=(0, 1, 0), width=1)
-        shape.draw_rect(price_rect)
-        shape.finish(color=(0, 0, 1), width=1)
+        for rect, color in [
+            (image_rect, (1, 0, 0)),
+            (info_panel_rect, (0, 1, 0)),
+            (title_rect, (0, 0, 1)),
+            (area_rect, (1, 1, 0)),
+            (price_rect, (1, 0, 1)),
+            (phone_rect, (0, 1, 1)),
+        ]:
+            shape.draw_rect(rect)
+            shape.finish(color=color, width=1)
         shape.commit()
 
-    # --- IMAGE FETCHING WORKFLOW ---
+    # --- IMAGE FETCHING ---
     image_url = property_data.get("image_url")
     if image_url:
         try:
-            logger.info(
-                f"[{index}] Downloading property graphic asset from: {image_url}"
-            )
+            logger.info(f"[{index}] Downloading property graphic asset from: {image_url}")
             t_start_download = time.perf_counter()
-
             ssl_context = ssl._create_unverified_context()
             headers = {
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.9",
             }
-
             req = urllib.request.Request(image_url.strip(), headers=headers)
             with urllib.request.urlopen(req, context=ssl_context, timeout=15) as resp:
                 raw_payload = resp.read()
-
-                # Verify real format by inspecting file signatures (Magic Bytes) directly
-                if raw_payload.startswith(b"\xff\xd8") or raw_payload.startswith(
-                    b"\x89PNG"
-                ):
-                    page.insert_image(
-                        image_rect, stream=raw_payload, keep_proportion=True
-                    )
-                    logger.info(
-                        f"[{index}] Image stream successfully bound into canvas layout context. Size: {len(raw_payload)} bytes. Runtime: {time.perf_counter() - t_start_download:.2f}s"
-                    )
+                if raw_payload.startswith(b"\xff\xd8") or raw_payload.startswith(b"\x89PNG"):
+                    page.insert_image(image_rect, stream=raw_payload, keep_proportion=True)
+                    logger.info(f"[{index}] Image bound into 9:16 canvas. Size: {len(raw_payload)} bytes.")
                 else:
-                    content_type = resp.info().get_content_type()
-                    error_sample = raw_payload.decode("utf-8", errors="ignore")[:100]
-                    logger.warning(
-                        f"[{index}] Content-Type check failed or invalid binary. Content-Type: {content_type}. Header sample: {error_sample}"
-                    )
-
+                    logger.warning(f"[{index}] Invalid image binary.")
         except Exception as e:
-            logger.error(f"[{index}] Unexpected error parsing image stream layer: {e}")
+            logger.error(f"[{index}] Error parsing image stream layer: {e}")
     else:
         logger.warning(
             f"[{index}] No 'image_url' found for property ID: {property_data.get('id', '?')}"
         )
 
-    # --- DYNAMIC ROTATING THEME (OFFSET BY DAY) ---
-    current_day = datetime.date.today().day
-    # We combine the property index with the day of the month to rotate the start of the pattern daily.
-    effective_index = index + current_day
-    is_dark_theme = effective_index % 2 != 0
-
-    bg_color = (
-        (0.1, 0.1, 0.1) if is_dark_theme else (1, 1, 1)
-    )  # Elegant Black or White
-    text_color = (1, 1, 1) if is_dark_theme else (0.2, 0.2, 0.2)  # White or dark gray
-
-    logger.info(
-        f"[{index}] Day: {current_day} | Effective Theme: {'Dark' if is_dark_theme else 'Light'}"
-    )
-
-    # --- MASK ORIGINAL CAPSULE & INJECT TYPOGRAPHY ---
-    bg_rect = fitz.Rect(35, 735, 775, 830)
-    mask_shape = page.new_shape()
-    mask_shape.draw_rect(bg_rect)
-    mask_shape.finish(color=bg_color, fill=bg_color)
-    mask_shape.commit()
-
+    # --- TITLE TEXT ---
     title_text = property_data.get("title", "No Title Available")
     area_text = property_data.get("area_built", "")
     prop_id = property_data.get("id", "")
-
     title_upper = title_text.upper()
     operation_tag = (
-        "VENTA"
-        if "VENTA" in title_upper
+        "VENTA" if "VENTA" in title_upper
         else ("ARRIENDO" if "ARRIENDO" in title_upper else "INMOBILIARIA")
     )
-
     sub_parts = []
     if area_text:
         sub_parts.append(area_text)
     if prop_id:
         sub_parts.append(f"Ref: #{prop_id}")
-
     sub_line = " - ".join(sub_parts)
-    full_title = (
-        f"[{operation_tag}] {title_text}\n{sub_line}"
-        if sub_line
-        else f"[{operation_tag}] {title_text}"
-    )
-
-    price_text = format_price(property_data.get("price", 0))
+    full_title = f"[{operation_tag}] {title_text}\n{sub_line}" if sub_line else f"[{operation_tag}] {title_text}"
 
     page.insert_textbox(
         title_rect,
         full_title,
-        fontsize=16,
+        fontsize=42,
         fontname="Helvetica-Bold",
         align=1,
-        color=text_color,
+        color=WHITE_COLOR,
     )
+
+    # --- PRICE TEXT (inside the panel, gold color) ---
+    price_text = format_price(property_data.get("price", 0))
     page.insert_textbox(
         price_rect,
         price_text,
-        fontsize=40,
+        fontsize=80,
         fontname="Helvetica-Bold",
         align=1,
-        color=(1, 0.5, 0),
+        color=GOLD_COLOR,
     )
 
-    pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0))
-    img_bytes = pix.tobytes("jpeg")
+    # --- PHONE TEXT (inside the panel, gold color) ---
+    phone_text = "+57 321 2769477"
+    page.insert_textbox(
+        phone_rect,
+        phone_text,
+        fontsize=44,
+        fontname="Helvetica-Bold",
+        align=1,
+        color=GOLD_COLOR,
+    )
+
+    # --- RENDER at 1.0x since canvas is already 1080x1920 ---
+    pix = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
+    img_bytes = pix.tobytes("jpeg", jpg_quality=92)
     doc.close()
 
-    logger.info(
-        f"[{index}] Image transformation pipeline completed in {time.perf_counter() - t_start_render:.2f}s"
-    )
+    logger.info(f"[{index}] Image pipeline completed in {time.perf_counter() - t_start_render:.2f}s")
     return BytesIO(img_bytes)
 
 
@@ -236,8 +224,8 @@ def _fetch_feed(api_url):
 
 
 def _load_template_bytes():
-    """Load the base PDF asset into memory safe buffer context"""
-    template_path = os.path.join(os.path.dirname(__file__), "assets", "template-1.pdf")
+    """Load the base PNG asset into memory safe buffer context"""
+    template_path = os.path.join(os.path.dirname(__file__), "assets", "template-1.png")
     try:
         with open(template_path, "rb") as f:
             return f.read()
