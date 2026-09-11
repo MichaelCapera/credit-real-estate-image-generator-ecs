@@ -13,6 +13,7 @@ from src.email_service import EmailService
 from src.s3_service import S3Service
 from src.database_service import DatabaseService
 import datetime
+from PIL import Image
 
 # Standard container logging routing directly to stdout for CloudWatch/ECS logs
 logging.basicConfig(
@@ -37,6 +38,54 @@ def select_properties(properties, quantity):
         return properties
     return random.sample(properties, quantity)
 
+def _cover_image_for_rect(raw_payload, target_width, target_height):
+    """
+    Resize and center-crop an image to exactly fill target_width x target_height.
+    Mimics CSS 'object-fit: cover' behavior: fills the box without distortion,
+    cropping the excess from the center.
+    """
+    img = Image.open(BytesIO(raw_payload)).convert("RGB")
+
+    img_ratio = img.width / img.height
+    target_ratio = target_width / target_height
+
+    if img_ratio > target_ratio:
+        # Image is wider than target: crop left/right
+        new_width = int(img.height * target_ratio)
+        offset = (img.width - new_width) // 2
+        img = img.crop((offset, 0, img.width - offset, img.height))
+    else:
+        # Image is taller than target: crop top/bottom
+        new_height = int(img.width / target_ratio)
+        offset = (img.height - new_height) // 2
+        img = img.crop((0, offset, img.width, img.height - offset))
+
+    # Resize to exact target dimensions
+    img = img.resize((target_width, target_height), Image.LANCZOS)
+
+    out = BytesIO()
+    img.save(out, format="JPEG", quality=92)
+    return out.getvalue()
+
+def _fit_text_in_rect(page, rect, text, fontname="Helvetica-Bold", align=1, color=(0, 0, 0), max_size=80, min_size=32):
+    """Insert text into rect, auto-shrinking font until it fits."""
+    for size in range(max_size, min_size - 1, -2):
+        result = page.insert_textbox(
+            rect,
+            text,
+            fontsize=size,
+            fontname=fontname,
+            align=align,
+            color=color,
+        )
+        if result >= 0:
+            logger.info(f"[FIT] '{text}' fits at fontsize={size}")
+            return size
+    # Fallback: force min size
+    logger.warning(f"[FIT] '{text}' forced to min_size={min_size}")
+    page.insert_textbox(rect, text, fontsize=min_size, fontname=fontname, align=align, color=color)
+    return min_size
+
 
 def generate_image_in_memory(property_data, template_bytes, index, debug=False):
     t_start_render = time.perf_counter()
@@ -48,29 +97,31 @@ def generate_image_in_memory(property_data, template_bytes, index, debug=False):
     # Insert the PNG template as the background of the page
     page.insert_image(fitz.Rect(0, 0, 1080, 1920), stream=template_bytes)
 
-    # --- LAYOUT RECTANGLES (in 1080x1920 coordinate space) ---
-    # Property image: white block area
-    image_rect = fitz.Rect(0, 320, 1080, 850)
+    # --- LAYOUT RECTANGLES (measured from template-1.png) ---
+    # Header: Y=0 to Y=550
+    # White zone (image): Y=550 to Y=1290
+    image_rect = fitz.Rect(0, 550, 1080, 1290)
 
-    # Info panel (black block): holds title, area, ref, price, phone
-    info_panel_rect = fitz.Rect(0, 850, 1080, 1450)
+    # Black panel: Y=1290 to Y=1640
+    info_panel_rect = fitz.Rect(0, 1290, 1080, 1640)
 
-    # Title text inside the panel
-    title_rect = fitz.Rect(60, 880, 1020, 1060)
+    # Title
+    title_rect = fitz.Rect(60, 1310, 1020, 1450)
 
-    # Area + Ref text
-    area_rect = fitz.Rect(60, 1070, 1020, 1140)
+    # Area + Ref
+    area_rect = fitz.Rect(60, 1450, 1020, 1560)
 
-    # Price text (gold, big)
-    price_rect = fitz.Rect(60, 1170, 1020, 1300)
+    # Price (gold, big)
+    price_rect = fitz.Rect(60, 1650, 1020, 1750)
 
-    # Phone text (gold)
-    phone_rect = fitz.Rect(60, 1320, 1020, 1420)
+    # Phone (gold)
+    phone_rect = fitz.Rect(60, 1540, 1020, 1630)
 
     # Colors
-    GOLD_COLOR = (0.788, 0.663, 0.380)   # #C9A961
-    WHITE_COLOR = (1, 1, 1)
+    GOLD_COLOR = (0.788, 0.663, 0.380)  # #C9A961
+    WHITE_COLOR = (0.788, 0.663, 0.380)
     GRAY_COLOR = (0.65, 0.65, 0.65)
+    BLACK_COLOR = (0, 0, 0)  
 
     if debug:
         shape = page.new_shape()
@@ -90,7 +141,9 @@ def generate_image_in_memory(property_data, template_bytes, index, debug=False):
     image_url = property_data.get("image_url")
     if image_url:
         try:
-            logger.info(f"[{index}] Downloading property graphic asset from: {image_url}")
+            logger.info(
+                f"[{index}] Downloading property graphic asset from: {image_url}"
+            )
             t_start_download = time.perf_counter()
             ssl_context = ssl._create_unverified_context()
             headers = {
@@ -101,8 +154,15 @@ def generate_image_in_memory(property_data, template_bytes, index, debug=False):
             with urllib.request.urlopen(req, context=ssl_context, timeout=15) as resp:
                 raw_payload = resp.read()
                 if raw_payload.startswith(b"\xff\xd8") or raw_payload.startswith(b"\x89PNG"):
-                    page.insert_image(image_rect, stream=raw_payload, keep_proportion=True)
-                    logger.info(f"[{index}] Image bound into 9:16 canvas. Size: {len(raw_payload)} bytes.")
+                    # Pre-process the image to fill image_rect without distortion
+                    image_width = int(image_rect.width)
+                    image_height = int(image_rect.height)
+                    prepared_bytes = _cover_image_for_rect(raw_payload, image_width, image_height)
+                    page.insert_image(image_rect, stream=prepared_bytes)
+                    logger.info(
+                        f"[{index}] Image bound into 9:16 canvas. "
+                        f"Original: {len(raw_payload)} bytes, prepared: {len(prepared_bytes)} bytes."
+                    )
                 else:
                     logger.warning(f"[{index}] Invalid image binary.")
         except Exception as e:
@@ -117,36 +177,31 @@ def generate_image_in_memory(property_data, template_bytes, index, debug=False):
     area_text = property_data.get("area_built", "")
     prop_id = property_data.get("id", "")
     title_upper = title_text.upper()
-    operation_tag = (
-        "VENTA" if "VENTA" in title_upper
-        else ("ARRIENDO" if "ARRIENDO" in title_upper else "INMOBILIARIA")
-    )
+
     sub_parts = []
     if area_text:
         sub_parts.append(area_text)
     if prop_id:
         sub_parts.append(f"Ref: #{prop_id}")
     sub_line = " - ".join(sub_parts)
-    full_title = f"[{operation_tag}] {title_text}\n{sub_line}" if sub_line else f"[{operation_tag}] {title_text}"
 
     page.insert_textbox(
         title_rect,
-        full_title,
+        title_upper,
         fontsize=42,
         fontname="Helvetica-Bold",
         align=1,
-        color=WHITE_COLOR,
+        color=GOLD_COLOR,
     )
 
-    # --- PRICE TEXT (inside the panel, gold color) ---
-    price_text = format_price(property_data.get("price", 0))
-    page.insert_textbox(
-        price_rect,
-        price_text,
-        fontsize=80,
-        fontname="Helvetica-Bold",
-        align=1,
-        color=GOLD_COLOR,
+    if sub_line:
+        page.insert_textbox(
+            area_rect,
+            sub_line,
+            fontsize=46,
+            fontname="Helvetica-Bold",
+            align=1,
+            color=GRAY_COLOR,
     )
 
     # --- PHONE TEXT (inside the panel, gold color) ---
@@ -160,12 +215,31 @@ def generate_image_in_memory(property_data, template_bytes, index, debug=False):
         color=GOLD_COLOR,
     )
 
+    
+    # --- PRICE TEXT (inside the panel, gold color) ---
+
+    price_text = format_price(property_data.get("price", 0))
+
+    if price_text:
+        _fit_text_in_rect(
+            page,
+            price_rect,
+            price_text,
+            fontname="Helvetica-Bold",
+            align=1,
+            color=BLACK_COLOR,
+            max_size=80,
+            min_size=36,
+        )
+
     # --- RENDER at 1.0x since canvas is already 1080x1920 ---
     pix = page.get_pixmap(matrix=fitz.Matrix(1.0, 1.0))
     img_bytes = pix.tobytes("jpeg", jpg_quality=92)
     doc.close()
 
-    logger.info(f"[{index}] Image pipeline completed in {time.perf_counter() - t_start_render:.2f}s")
+    logger.info(
+        f"[{index}] Image pipeline completed in {time.perf_counter() - t_start_render:.2f}s"
+    )
     return BytesIO(img_bytes)
 
 
@@ -225,7 +299,7 @@ def _fetch_feed(api_url):
 
 def _load_template_bytes():
     """Load the base PNG asset into memory safe buffer context"""
-    template_path = os.path.join(os.path.dirname(__file__), "assets", "template-1.png")
+    template_path = os.path.join(os.path.dirname(__file__), "assets", "template-1.jpg")
     try:
         with open(template_path, "rb") as f:
             return f.read()
